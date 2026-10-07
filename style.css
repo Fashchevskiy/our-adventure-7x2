@@ -1,0 +1,138 @@
+html,
+body {
+    margin: 0;
+    height: 100%;
+    background: #0b0618;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    font-family: system-ui, sans-serif;
+    color: #fff;
+}
+
+#game {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+#start,
+#rotate {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    text-align: center;
+    background: radial-gradient(circle, #5a2380, #0b0618);
+    padding: 16px;
+}
+
+#rotate {
+    display: none;
+    z-index: 9;
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+    body.playing #rotate {
+        display: flex;
+    }
+}
+
+h1 {
+    font-size: clamp(28px, 6vw, 56px);
+    margin: 0;
+    text-shadow: 0 0 24px #ff6fa5;
+}
+
+.big {
+    font-size: 22px;
+    padding: 12px 44px;
+    border: 0;
+    border-radius: 30px;
+    background: linear-gradient(#ff8fb8, #ff5c97);
+    color: #fff;
+    box-shadow: 0 0 20px #ff5c9788;
+}
+
+.big.sm {
+    font-size: 14px;
+    padding: 6px 22px;
+    background: #ffffff22;
+    box-shadow: none;
+}
+
+p {
+    opacity: 0.7;
+    font-size: 13px;
+}
+
+#touch {
+    display: none;
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+}
+
+@media (pointer: coarse) {
+    body.playing #touch {
+        display: block;
+    }
+}
+
+#joy {
+    position: absolute;
+    left: calc(28px + env(safe-area-inset-left));
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    background: #ffffff22;
+    border: 2px solid #ffffff55;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+#joy i {
+    position: absolute;
+    left: 50px;
+    top: 50px;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #ffffff77;
+}
+
+#btns {
+    position: absolute;
+    right: calc(28px + env(safe-area-inset-right));
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    display: flex;
+    gap: 14px;
+    align-items: flex-end;
+}
+
+#btns b {
+    pointer-events: auto;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 62px;
+    height: 62px;
+    border-radius: 50%;
+    background: #ff6fa555;
+    border: 2px solid #ffffff77;
+    font-size: 15px;
+}
+
+#btns b[data-a="jump"] {
+    width: 84px;
+    height: 84px;
+}

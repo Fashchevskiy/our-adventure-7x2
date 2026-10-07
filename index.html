@@ -1,0 +1,4505 @@
+```html
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="utf-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    >
+
+    <title>Our Little Adventure ❤️</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<canvas id="game" width="1280" height="720"></canvas>
+
+<div id="touch">
+    <div id="joy">
+        <i></i>
+    </div>
+
+    <div id="btns">
+        <b data-a="interact">E</b>
+        <b data-a="attack">⚔</b>
+        <b data-a="jump">JUMP</b>
+    </div>
+</div>
+
+<div id="start">
+    <h1>Our Little Adventure ❤️</h1>
+
+    <button class="big" id="go">START</button>
+    <button class="big sm" id="reset">Нова гра</button>
+
+    <p>
+        ПК: A/D рух · Space стрибок · Shift біг · J/K атака · E взаємодія
+    </p>
+</div>
+
+<div id="rotate">
+    <div style="font-size:64px">📱↻</div>
+    <h2>Поверни телефон горизонтально ❤️</h2>
+</div>
+
+<script>
+
+// ============================================================
+// INPUT
+// ============================================================
+
+const input = {
+    ax: 0,
+    jump: false,
+    attack: false,
+    interact: false,
+    run: false
+};
+
+const kb = {};
+const tc = {};
+
+let joyAx = 0;
+
+const M = {
+    KeyA: "l",
+    ArrowLeft: "l",
+
+    KeyD: "r",
+    ArrowRight: "r",
+
+    Space: "jump",
+    KeyW: "jump",
+    ArrowUp: "jump",
+
+    KeyJ: "attack",
+    KeyK: "attack",
+
+    KeyE: "interact",
+
+    ShiftLeft: "run"
+};
+
+addEventListener("keydown", e => {
+    if (M[e.code]) {
+        kb[M[e.code]] = 1;
+        e.preventDefault();
+    }
+});
+
+addEventListener("keyup", e => {
+    if (M[e.code]) {
+        kb[M[e.code]] = 0;
+    }
+});
+
+addEventListener("blur", () => {
+    for (const k in kb) {
+        kb[k] = 0;
+    }
+});
+
+function poll() {
+    const k = (kb.r ? 1 : 0) - (kb.l ? 1 : 0);
+
+    input.ax = k || joyAx;
+
+    input.run =
+        !!kb.run ||
+        (!k && Math.abs(joyAx) > 0.85);
+
+    for (const a of ["jump", "attack", "interact"]) {
+        input[a] = !!(kb[a] || tc[a]);
+    }
+}
+
+
+// ============================================================
+// TOUCH CONTROLS
+// ============================================================
+
+function initTouch() {
+    const joy = document.getElementById("joy");
+    const knob = joy.firstElementChild;
+
+    let id = null;
+
+    const set = e => {
+        const r = joy.getBoundingClientRect();
+        const R = r.width / 2;
+        const m = R * 0.6;
+
+        const dx = Math.max(
+            -m,
+            Math.min(
+                m,
+                e.clientX - (r.left + R)
+            )
+        );
+
+        joyAx = Math.abs(dx) < m * 0.2
+            ? 0
+            : dx / m;
+
+        knob.style.transform = `translateX(${dx}px)`;
+    };
+
+    const end = e => {
+        if (e.pointerId === id) {
+            id = null;
+            joyAx = 0;
+            knob.style.transform = "";
+        }
+    };
+
+    joy.addEventListener("pointerdown", e => {
+        id = e.pointerId;
+        joy.setPointerCapture(id);
+        set(e);
+    });
+
+    joy.addEventListener("pointermove", e => {
+        if (e.pointerId === id) {
+            set(e);
+        }
+    });
+
+    joy.addEventListener("pointerup", end);
+    joy.addEventListener("pointercancel", end);
+
+    document
+        .querySelectorAll("#btns b")
+        .forEach(b => {
+            const a = b.dataset.a;
+
+            b.addEventListener("pointerdown", e => {
+                tc[a] = 1;
+                b.setPointerCapture(e.pointerId);
+            });
+
+            const up = () => {
+                tc[a] = 0;
+            };
+
+            b.addEventListener("pointerup", up);
+            b.addEventListener("pointercancel", up);
+        });
+
+    addEventListener("contextmenu", e => {
+        e.preventDefault();
+    });
+}
+
+
+// ============================================================
+// PLAYER
+// ============================================================
+
+const HEAD_W = 84;
+const HEAD_LIFT = 0;
+
+class Player {
+
+    constructor(
+        x,
+        y,
+        headFile = "assets/characters/dasha_head.png",
+        color = "#ff6fa5",
+        dress = true
+    ) {
+        Object.assign(this, {
+            x,
+            y,
+            prevY: y,
+
+            vx: 0,
+            vy: 0,
+
+            w: 44,
+            h: 110,
+
+            face: 1,
+
+            ground: false,
+            t: 0,
+            prevJump: false,
+
+            atk: 0,
+            swing: 0,
+
+            hp: 5,
+            inv: 0,
+
+            kb: 0,
+
+            color,
+            dress
+        });
+
+        const i = new Image();
+
+        i.onload = () => {
+            this.head = i;
+        };
+
+        i.src = headFile;
+    }
+
+    update(dt, inp, solids) {
+
+        this.t += dt;
+        this.inv -= dt;
+
+        const sp = inp.run ? 400 : 250;
+
+        this.vx = inp.ax * sp + this.kb;
+
+        this.kb *= Math.pow(0.001, dt);
+
+        if (inp.ax) {
+            this.face = Math.sign(inp.ax);
+        }
+
+        if (
+            inp.jump &&
+            !this.prevJump &&
+            this.ground
+        ) {
+            this.vy = -800;
+            this.ground = false;
+        }
+
+        this.prevJump = inp.jump;
+
+        if (
+            inp.attack &&
+            this.atk <= 0
+        ) {
+            this.atk = 0.25;
+            this.swing++;
+        }
+
+        this.atk -= dt;
+
+        this.vy = Math.min(
+            this.vy + 1900 * dt,
+            1200
+        );
+
+        this.x += this.vx * dt;
+
+        for (const s of solids) {
+
+            if (!s.p && this.hit(s)) {
+                this.x = this.vx > 0
+                    ? s.x - this.w / 2
+                    : s.x + s.w + this.w / 2;
+            }
+        }
+
+        this.prevY = this.y;
+        this.y += this.vy * dt;
+
+        this.ground = false;
+
+        for (const s of solids) {
+
+            if (this.hit(s)) {
+
+                if (
+                    s.p &&
+                    !(
+                        this.vy >= 0 &&
+                        this.prevY <= s.y + 2
+                    )
+                ) {
+                    continue;
+                }
+
+                if (this.vy >= 0) {
+                    this.y = s.y;
+                    this.ground = true;
+                } else if (!s.p) {
+                    this.y =
+                        s.y +
+                        s.h +
+                        this.h;
+                }
+
+                this.vy = 0;
+            }
+        }
+    }
+
+    hit(s) {
+        return (
+            this.x + this.w / 2 > s.x &&
+            this.x - this.w / 2 < s.x + s.w &&
+            this.y > s.y &&
+            this.y - this.h < s.y + s.h
+        );
+    }
+
+    box() {
+        const a = this.x;
+        const b = this.x + this.face * 95;
+
+        return {
+            x1: Math.min(a, b),
+            x2: Math.max(a, b),
+            y1: this.y - 110,
+            y2: this.y
+        };
+    }
+
+    hurt(d, dir) {
+
+        if (this.inv > 0) {
+            return;
+        }
+
+        this.hp -= d;
+        this.inv = 1.2;
+
+        this.kb = dir * 450;
+        this.vy = -350;
+
+        this.ground = false;
+    }
+
+    draw(c) {
+
+        if (
+            this.inv > 0 &&
+            Math.floor(this.t * 20) % 2
+        ) {
+            return;
+        }
+
+        const mv =
+            Math.abs(this.vx) > 10 &&
+            this.ground;
+
+        const sw = mv
+            ? Math.sin(
+                this.t *
+                (
+                    Math.abs(this.vx) > 300
+                        ? 22
+                        : 14
+                )
+            )
+            : 0;
+
+        c.save();
+
+        c.translate(this.x, this.y);
+        c.scale(this.face, 1);
+
+        // Legs
+        c.fillStyle =
+            this.dress
+                ? "#f2c9a5"
+                : "#2c3e66";
+
+        c.fillRect(
+            -13 + sw * 9,
+            -24,
+            9,
+            24
+        );
+
+        c.fillRect(
+            4 - sw * 9,
+            -24,
+            9,
+            24
+        );
+
+        // Body
+        c.fillStyle = this.color;
+
+        c.beginPath();
+
+        if (this.dress) {
+
+            c.moveTo(-14, -62);
+            c.lineTo(14, -62);
+            c.lineTo(26, -20);
+            c.lineTo(-26, -20);
+
+        } else {
+
+            c.moveTo(-16, -64);
+            c.lineTo(16, -64);
+            c.lineTo(16, -22);
+            c.lineTo(-16, -22);
+        }
+
+        c.fill();
+
+        // Head
+        const hy =
+            -60 +
+            (
+                mv
+                    ? -Math.abs(sw) * 4
+                    : 0
+            ) +
+            HEAD_LIFT;
+
+        if (this.head) {
+
+            const hh =
+                HEAD_W *
+                this.head.height /
+                this.head.width;
+
+            c.drawImage(
+                this.head,
+                -HEAD_W / 2,
+                hy - hh,
+                HEAD_W,
+                hh
+            );
+
+        } else {
+
+            // Fallback face
+            c.fillStyle =
+                this.dress
+                    ? "#5a3420"
+                    : "#2a2018";
+
+            c.beginPath();
+            c.arc(
+                0,
+                hy - 38,
+                34,
+                0,
+                7
+            );
+            c.fill();
+
+            c.fillStyle = "#f2c9a5";
+
+            c.beginPath();
+            c.arc(
+                0,
+                hy - 34,
+                28,
+                0,
+                7
+            );
+            c.fill();
+
+            c.fillStyle = "#222";
+
+            c.fillRect(
+                6,
+                hy - 40,
+                5,
+                7
+            );
+
+            c.fillRect(
+                -9,
+                hy - 40,
+                5,
+                7
+            );
+
+            c.strokeStyle = "#c0505a";
+            c.lineWidth = 2;
+
+            c.beginPath();
+
+            c.arc(
+                0,
+                hy - 28,
+                6,
+                0.2,
+                2.9
+            );
+
+            c.stroke();
+        }
+
+        // Attack animation
+        if (this.atk > 0) {
+
+            c.strokeStyle = "#fff";
+            c.globalAlpha =
+                Math.min(
+                    1,
+                    this.atk * 4
+                );
+
+            c.lineWidth = 6;
+
+            c.beginPath();
+
+            c.arc(
+                20,
+                -60,
+                60,
+                -1.2,
+                1.2
+            );
+
+            c.stroke();
+
+            c.globalAlpha = 1;
+        }
+
+        c.restore();
+    }
+}
+
+
+// ============================================================
+// ENEMY
+// ============================================================
+
+class Enemy {
+
+    constructor(type, x, y, range) {
+
+        const f = type === "fox";
+
+        Object.assign(this, {
+            type,
+
+            x,
+            y,
+
+            x0: x - range,
+            x1: x + range,
+
+            hp: f ? 2 : 5,
+
+            w: f ? 54 : 86,
+            h: f ? 36 : 58,
+
+            dir: 1,
+
+            dmg: f ? 1 : 2,
+
+            t: 0,
+            stun: 0,
+            kv: 0,
+
+            swing: -1,
+
+            flash: 0,
+
+            dead: false
+        });
+    }
+
+    update(dt, p) {
+
+        this.t += dt;
+        this.flash -= dt;
+
+        if (this.stun > 0) {
+
+            this.stun -= dt;
+            this.x += this.kv * dt;
+            this.kv *= 0.9;
+
+            return;
+        }
+
+        const fox =
+            this.type === "fox";
+
+        const d =
+            p.x - this.x;
+
+        const near =
+            Math.abs(p.y - this.y) < 90;
+
+        let sp =
+            fox ? 100 : 70;
+
+        if (
+            near &&
+            Math.abs(d) <
+                (fox ? 260 : 380)
+        ) {
+
+            this.dir =
+                Math.sign(d) || 1;
+
+            sp =
+                fox ? 190 : 300;
+
+        } else {
+
+            if (this.x > this.x1) {
+                this.dir = -1;
+            }
+
+            if (this.x < this.x0) {
+                this.dir = 1;
+            }
+        }
+
+        this.x +=
+            this.dir *
+            sp *
+            dt;
+    }
+
+    draw(c) {
+
+        const sw =
+            Math.sin(this.t * 14) * 6;
+
+        c.save();
+
+        c.translate(
+            this.x,
+            this.y
+        );
+
+        c.scale(
+            this.dir,
+            1
+        );
+
+        if (
+            this.flash > 0 &&
+            Math.floor(
+                this.t * 30
+            ) % 2
+        ) {
+            c.globalAlpha = 0.4;
+        }
+
+        if (this.type === "fox") {
+
+            // FOX
+
+            c.fillStyle = "#d9742c";
+
+            c.fillRect(
+                -18 + sw,
+                -12,
+                7,
+                12
+            );
+
+            c.fillRect(
+                12 - sw,
+                -12,
+                7,
+                12
+            );
+
+            c.beginPath();
+
+            c.ellipse(
+                0,
+                -20,
+                26,
+                14,
+                0,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.beginPath();
+
+            c.ellipse(
+                -30,
+                -26,
+                16,
+                8,
+                -0.5,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.fillStyle = "#fff";
+
+            c.beginPath();
+
+            c.arc(
+                -42,
+                -30,
+                6,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.fillStyle = "#e8803a";
+
+            c.beginPath();
+
+            c.arc(
+                24,
+                -28,
+                12,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.beginPath();
+
+            c.moveTo(
+                16,
+                -36
+            );
+
+            c.lineTo(
+                20,
+                -52
+            );
+
+            c.lineTo(
+                26,
+                -38
+            );
+
+            c.fill();
+
+            c.beginPath();
+
+            c.moveTo(
+                26,
+                -38
+            );
+
+            c.lineTo(
+                32,
+                -50
+            );
+
+            c.lineTo(
+                34,
+                -34
+            );
+
+            c.fill();
+
+            c.fillStyle = "#222";
+
+            c.fillRect(
+                28,
+                -31,
+                4,
+                4
+            );
+
+            c.fillRect(
+                34,
+                -26,
+                4,
+                4
+            );
+
+        } else {
+
+            // BOAR
+
+            c.fillStyle = "#4a3022";
+
+            c.fillRect(
+                -30 + sw,
+                -16,
+                10,
+                16
+            );
+
+            c.fillRect(
+                22 - sw,
+                -16,
+                10,
+                16
+            );
+
+            c.fillStyle = "#6b4a3a";
+
+            c.beginPath();
+
+            c.ellipse(
+                0,
+                -36,
+                42,
+                26,
+                0,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.fillStyle = "#3a2418";
+
+            for (
+                let i = -30;
+                i < 30;
+                i += 12
+            ) {
+
+                c.beginPath();
+
+                c.moveTo(
+                    i,
+                    -58
+                );
+
+                c.lineTo(
+                    i + 6,
+                    -72
+                );
+
+                c.lineTo(
+                    i + 12,
+                    -58
+                );
+
+                c.fill();
+            }
+
+            c.fillStyle = "#7a5645";
+
+            c.beginPath();
+
+            c.arc(
+                38,
+                -32,
+                18,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.fillStyle = "#fff";
+
+            c.beginPath();
+
+            c.moveTo(
+                46,
+                -24
+            );
+
+            c.lineTo(
+                62,
+                -34
+            );
+
+            c.lineTo(
+                52,
+                -18
+            );
+
+            c.fill();
+
+            c.fillStyle = "#222";
+
+            c.fillRect(
+                40,
+                -40,
+                5,
+                5
+            );
+        }
+
+        c.restore();
+    }
+}
+
+
+// ============================================================
+// FOREST
+// ============================================================
+
+const W = 6000;
+const GY = 620;
+
+function heart(c, x, y, s, col) {
+
+    c.fillStyle = col;
+
+    c.beginPath();
+
+    c.moveTo(
+        x,
+        y + s * 0.6
+    );
+
+    c.bezierCurveTo(
+        x - s * 1.2,
+        y - s * 0.1,
+        x - s * 0.6,
+        y - s,
+        x,
+        y - s * 0.4
+    );
+
+    c.bezierCurveTo(
+        x + s * 0.6,
+        y - s,
+        x + s * 1.2,
+        y - s * 0.1,
+        x,
+        y + s * 0.6
+    );
+
+    c.fill();
+}
+
+function tree(c, x, y, h, col) {
+
+    c.fillStyle = col;
+
+    c.fillRect(
+        x - 8,
+        y - h * 0.3,
+        16,
+        h * 0.3
+    );
+
+    for (let k = 0; k < 3; k++) {
+
+        const w =
+            70 - k * 16;
+
+        const b =
+            y -
+            h * 0.25 -
+            k * h * 0.24;
+
+        c.beginPath();
+
+        c.moveTo(
+            x - w,
+            b
+        );
+
+        c.lineTo(
+            x + w,
+            b
+        );
+
+        c.lineTo(
+            x,
+            b - h * 0.38
+        );
+
+        c.fill();
+    }
+}
+
+class Forest {
+
+    constructor(save, onSave, goto) {
+
+        Object.assign(this, {
+            onSave,
+            goto,
+
+            t: 0,
+            cam: 0,
+
+            fx: [],
+
+            left: false
+        });
+
+        this.solids = [
+            {
+                x: 0,
+                y: GY,
+                w: W,
+                h: 200
+            },
+
+            ...[
+                [700, 500],
+                [1100, 420],
+                [1500, 520],
+                [2400, 470],
+                [3300, 400],
+                [4200, 480],
+                [5000, 430]
+            ].map(
+                ([x, y]) => ({
+                    x,
+                    y,
+                    w: 200,
+                    h: 20,
+                    p: true
+                })
+            )
+        ];
+
+        this.hearts = [
+            [800, 450],
+            [2500, 420],
+            [4300, 430]
+        ].map(
+            ([x, y], i) => ({
+                x,
+                y,
+                got: !!(
+                    save.hearts &&
+                    save.hearts[i]
+                )
+            })
+        );
+
+        this.player =
+            new Player(
+                120,
+                GY
+            );
+
+        this.en = [
+            ["fox", 900, 150],
+            ["fox", 1700, 160],
+            ["boar", 2200, 200],
+            ["fox", 2900, 150],
+            ["boar", 3500, 200],
+            ["fox", 4000, 150],
+            ["boar", 4700, 220],
+            ["fox", 5200, 150]
+        ].map(
+            ([t, x, r]) =>
+                new Enemy(
+                    t,
+                    x,
+                    GY,
+                    r
+                )
+        );
+
+        this.ff =
+            Array.from(
+                { length: 40 },
+                (_, i) => ({
+                    x:
+                        (i * 337) %
+                        1380,
+
+                    y:
+                        150 +
+                        (i * 91) %
+                        450,
+
+                    s:
+                        0.6 +
+                        (i % 5) * 0.2,
+
+                    p: i
+                })
+            );
+    }
+
+    burst(x, y, n, c) {
+
+        for (
+            let i = 0;
+            i < n;
+            i++
+        ) {
+
+            this.fx.push({
+                x,
+                y,
+
+                vx:
+                    (Math.random() - 0.5) *
+                    400,
+
+                vy:
+                    -Math.random() *
+                    300,
+
+                l: 0.7,
+                c
+            });
+        }
+    }
+
+    update(dt, inp) {
+
+        this.t += dt;
+
+        const p =
+            this.player;
+
+        p.update(
+            dt,
+            inp,
+            this.solids
+        );
+
+        p.x =
+            Math.max(
+                30,
+                Math.min(
+                    W - 30,
+                    p.x
+                )
+            );
+
+        // Hearts
+        for (const h of this.hearts) {
+
+            if (
+                !h.got &&
+                Math.abs(
+                    h.x - p.x
+                ) < 45 &&
+                Math.abs(
+                    h.y -
+                    (p.y - 60)
+                ) < 70
+            ) {
+
+                h.got = true;
+
+                this.onSave({
+                    hearts:
+                        this.hearts.map(
+                            q => q.got
+                        )
+                });
+
+                for (
+                    let i = 0;
+                    i < 14;
+                    i++
+                ) {
+
+                    this.fx.push({
+                        x: h.x,
+                        y: h.y,
+
+                        vx:
+                            (Math.random() - 0.5) *
+                            300,
+
+                        vy:
+                            -Math.random() *
+                            300,
+
+                        l: 1,
+
+                        h: true,
+
+                        c: "#ff5082"
+                    });
+                }
+            }
+        }
+
+        // Attack
+        if (p.atk > 0.08) {
+
+            const b =
+                p.box();
+
+            for (const e of this.en) {
+
+                if (
+                    !e.dead &&
+                    e.swing !== p.swing &&
+                    e.x + e.w / 2 > b.x1 &&
+                    e.x - e.w / 2 < b.x2 &&
+                    e.y > b.y1 &&
+                    e.y - e.h < b.y2
+                ) {
+
+                    e.swing =
+                        p.swing;
+
+                    e.hp--;
+
+                    e.stun = 0.3;
+                    e.kv =
+                        p.face * 400;
+
+                    e.flash = 0.3;
+
+                    this.burst(
+                        e.x,
+                        e.y - e.h / 2,
+                        6,
+                        "#fff"
+                    );
+
+                    if (e.hp <= 0) {
+
+                        e.dead = true;
+
+                        this.burst(
+                            e.x,
+                            e.y - e.h / 2,
+                            14,
+                            "#ffd36b"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Enemies
+        for (const e of this.en) {
+
+            e.update(
+                dt,
+                p
+            );
+
+            if (
+                e.stun <= 0 &&
+                Math.abs(
+                    p.x - e.x
+                ) <
+                    (p.w + e.w) / 2 &&
+                p.y > e.y - e.h &&
+                p.y - p.h < e.y
+            ) {
+
+                p.hurt(
+                    e.dmg,
+                    Math.sign(
+                        p.x - e.x
+                    ) || 1
+                );
+            }
+        }
+
+        this.en =
+            this.en.filter(
+                e => !e.dead
+            );
+
+        // Respawn
+        if (p.hp <= 0) {
+
+            p.hp = 5;
+
+            p.x =
+                Math.max(
+                    120,
+                    Math.floor(
+                        p.x / 1500
+                    ) * 1500
+                );
+
+            p.y =
+                GY - 200;
+
+            p.vy = 0;
+            p.kb = 0;
+        }
+
+        // Effects
+        for (const f of this.fx) {
+
+            f.x +=
+                f.vx * dt;
+
+            f.y +=
+                f.vy * dt;
+
+            f.vy +=
+                500 * dt;
+
+            f.l -= dt;
+        }
+
+        this.fx =
+            this.fx.filter(
+                f => f.l > 0
+            );
+
+        this.open =
+            this.hearts.every(
+                h => h.got
+            );
+
+        if (
+            this.open &&
+            !this.left &&
+            Math.abs(
+                p.x - 5800
+            ) < 50
+        ) {
+
+            this.left = true;
+
+            this.goto(
+                "meeting"
+            );
+        }
+
+        const tg =
+            Math.max(
+                0,
+                Math.min(
+                    W - 1280,
+                    p.x - 640
+                )
+            );
+
+        this.cam +=
+            (
+                tg - this.cam
+            ) *
+            Math.min(
+                1,
+                dt * 5
+            );
+    }
+
+    layer(
+        c,
+        f,
+        gap,
+        col,
+        hb,
+        y
+    ) {
+
+        const off =
+            this.cam * f;
+
+        const i0 =
+            Math.floor(
+                off / gap
+            );
+
+        for (
+            let i = i0;
+            i <
+            i0 +
+            1280 / gap +
+            2;
+            i++
+        ) {
+
+            tree(
+                c,
+                i * gap - off,
+                y,
+                hb +
+                    (
+                        (
+                            i * 37 % 5 +
+                            5
+                        ) % 5
+                    ) * 35,
+                col
+            );
+        }
+    }
+
+    draw(c) {
+
+        const g =
+            c.createLinearGradient(
+                0,
+                0,
+                0,
+                720
+            );
+
+        g.addColorStop(
+            0,
+            "#2b1b5a"
+        );
+
+        g.addColorStop(
+            0.55,
+            "#e98fb5"
+        );
+
+        g.addColorStop(
+            1,
+            "#ffd6a5"
+        );
+
+        c.fillStyle = g;
+
+        c.fillRect(
+            0,
+            0,
+            1280,
+            720
+        );
+
+        const sg =
+            c.createRadialGradient(
+                900,
+                260,
+                10,
+                900,
+                260,
+                260
+            );
+
+        sg.addColorStop(
+            0,
+            "#fff3c4"
+        );
+
+        sg.addColorStop(
+            1,
+            "#fff3c400"
+        );
+
+        c.fillStyle = sg;
+
+        c.fillRect(
+            500,
+            0,
+            800,
+            600
+        );
+
+        this.layer(
+            c,
+            0.2,
+            220,
+            "#6a3f93",
+            300,
+            650
+        );
+
+        this.layer(
+            c,
+            0.45,
+            170,
+            "#3f2a74",
+            260,
+            670
+        );
+
+        this.layer(
+            c,
+            0.75,
+            230,
+            "#241a4d",
+            330,
+            720
+        );
+
+        c.save();
+
+        c.translate(
+            -this.cam,
+            0
+        );
+
+        const gr =
+            c.createLinearGradient(
+                0,
+                GY,
+                0,
+                720
+            );
+
+        gr.addColorStop(
+            0,
+            "#3d7a46"
+        );
+
+        gr.addColorStop(
+            1,
+            "#1d3a2a"
+        );
+
+        for (
+            const s of this.solids
+        ) {
+
+            c.fillStyle =
+                s.p
+                    ? "#6b4a3a"
+                    : gr;
+
+            c.fillRect(
+                s.x,
+                s.y,
+                s.w,
+                s.p
+                    ? s.h
+                    : 200
+            );
+
+            c.fillStyle =
+                "#6fd07a";
+
+            c.fillRect(
+                s.x,
+                s.y,
+                s.w,
+                8
+            );
+        }
+
+        c.fillStyle =
+            "#6fd07a";
+
+        for (
+            let x =
+                Math.floor(
+                    this.cam / 40
+                ) * 40;
+
+            x <
+                this.cam + 1320;
+
+            x += 40
+        ) {
+
+            const h =
+                8 +
+                (
+                    (x / 40 * 7) % 3
+                ) * 5;
+
+            c.beginPath();
+
+            c.moveTo(
+                x,
+                GY
+            );
+
+            c.lineTo(
+                x + 6,
+                GY - h
+            );
+
+            c.lineTo(
+                x + 12,
+                GY
+            );
+
+            c.fill();
+        }
+
+        // Hearts
+        for (
+            const h of this.hearts
+        ) {
+
+            if (!h.got) {
+
+                heart(
+                    c,
+                    h.x,
+                    h.y +
+                        Math.sin(
+                            this.t * 3 +
+                            h.x
+                        ) * 6,
+                    26,
+                    "#ff3b6f"
+                );
+            }
+        }
+
+        // Portal
+        c.fillStyle =
+            this.open
+                ? "#ff9be0"
+                : "#555";
+
+        c.globalAlpha =
+            this.open
+                ? 0.7 +
+                    0.2 *
+                    Math.sin(
+                        this.t * 4
+                    )
+                : 0.6;
+
+        c.beginPath();
+
+        c.ellipse(
+            5800,
+            GY - 90,
+            45,
+            90,
+            0,
+            0,
+            7
+        );
+
+        c.fill();
+
+        c.globalAlpha = 1;
+
+        // Enemies
+        for (
+            const e of this.en
+        ) {
+            e.draw(c);
+        }
+
+        // Player
+        this.player.draw(c);
+
+        // Effects
+        for (
+            const f of this.fx
+        ) {
+
+            c.globalAlpha =
+                Math.max(
+                    0,
+                    f.l
+                );
+
+            if (f.h) {
+
+                heart(
+                    c,
+                    f.x,
+                    f.y,
+                    8,
+                    f.c
+                );
+
+            } else {
+
+                c.fillStyle =
+                    f.c;
+
+                c.beginPath();
+
+                c.arc(
+                    f.x,
+                    f.y,
+                    4,
+                    0,
+                    7
+                );
+
+                c.fill();
+            }
+        }
+
+        c.globalAlpha = 1;
+
+        c.restore();
+
+        // Fireflies
+        for (
+            const f of this.ff
+        ) {
+
+            const x =
+                (
+                    (
+                        f.x -
+                        this.cam * 0.9
+                    ) % 1380 +
+                    1380
+                ) % 1380 - 50;
+
+            const y =
+                f.y +
+                Math.sin(
+                    this.t * f.s +
+                    f.p
+                ) * 20;
+
+            const a =
+                0.5 +
+                0.5 *
+                Math.sin(
+                    this.t * 2 +
+                    f.p
+                );
+
+            c.fillStyle =
+                `rgba(255,246,168,${0.15 * a})`;
+
+            c.beginPath();
+
+            c.arc(
+                x,
+                y,
+                10,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.fillStyle =
+                `rgba(255,250,200,${0.4 + 0.5 * a})`;
+
+            c.beginPath();
+
+            c.arc(
+                x,
+                y,
+                3,
+                0,
+                7
+            );
+
+            c.fill();
+        }
+
+        // Light rays
+        c.fillStyle =
+            "rgba(255,240,200,.07)";
+
+        for (
+            let i = 0;
+            i < 4;
+            i++
+        ) {
+
+            const x =
+                200 +
+                i * 300 +
+                Math.sin(
+                    this.t * 0.3 +
+                    i
+                ) * 30;
+
+            c.beginPath();
+
+            c.moveTo(
+                x,
+                0
+            );
+
+            c.lineTo(
+                x + 90,
+                0
+            );
+
+            c.lineTo(
+                x + 330,
+                720
+            );
+
+            c.lineTo(
+                x + 150,
+                720
+            );
+
+            c.fill();
+        }
+
+        // HUD
+        const n =
+            this.hearts.filter(
+                h => h.got
+            ).length;
+
+        c.fillStyle =
+            "#fff";
+
+        c.font =
+            "bold 26px system-ui,sans-serif";
+
+        c.shadowColor =
+            "#0008";
+
+        c.shadowBlur = 6;
+
+        c.fillText(
+            `❤️ Hearts: ${n}/3`,
+            40,
+            52
+        );
+
+        c.fillText(
+            "HP: " +
+                "💗".repeat(
+                    Math.max(
+                        0,
+                        this.player.hp
+                    )
+                ),
+            40,
+            90
+        );
+
+        if (
+            this.player.x >
+            5200
+        ) {
+
+            c.fillText(
+                this.open
+                    ? "Іди в портал ✨"
+                    : "🔒 Збери всі 3 сердечка",
+                500,
+                100
+            );
+        }
+
+        c.shadowBlur = 0;
+    }
+}
+
+
+// ============================================================
+// MEETING
+// ============================================================
+
+class Meeting {
+
+    constructor(
+        save,
+        onSave,
+        goto
+    ) {
+
+        Object.assign(this, {
+            goto,
+
+            t: 0,
+
+            state: "walk",
+            st: 0,
+
+            fx: [],
+            hc: 0,
+
+            end: false
+        });
+
+        this.solids = [
+            {
+                x: 0,
+                y: GY,
+                w: 1280,
+                h: 200
+            }
+        ];
+
+        this.p =
+            new Player(
+                100,
+                GY
+            );
+
+        this.n =
+            new Player(
+                1000,
+                GY,
+                "assets/characters/me_head.png",
+                "#4a8fe0",
+                false
+            );
+
+        this.n.face = -1;
+
+        this.stars =
+            Array.from(
+                { length: 80 },
+                (_, i) => ({
+                    x:
+                        (i * 397) %
+                        1280,
+
+                    y:
+                        (i * 173) %
+                        420,
+
+                    r:
+                        1 +
+                        (i % 3) * 0.6
+                })
+            );
+    }
+
+    update(dt, inp) {
+
+        this.t += dt;
+
+        const p = this.p;
+        const n = this.n;
+
+        n.update(
+            dt,
+            { ax: 0 },
+            this.solids
+        );
+
+        if (
+            this.state === "walk"
+        ) {
+
+            p.update(
+                dt,
+                inp,
+                this.solids
+            );
+
+            p.x =
+                Math.max(
+                    40,
+                    Math.min(
+                        1240,
+                        p.x
+                    )
+                );
+
+            if (
+                p.x >
+                n.x - 170
+            ) {
+
+                this.state =
+                    "meet";
+
+                this.st = 0;
+            }
+
+        } else {
+
+            this.st += dt;
+
+            if (
+                this.state === "meet"
+            ) {
+
+                p.update(
+                    dt,
+                    { ax: 0 },
+                    this.solids
+                );
+
+                p.x +=
+                    (
+                        n.x -
+                        95 -
+                        p.x
+                    ) *
+                    Math.min(
+                        1,
+                        dt * 3
+                    );
+
+                p.face = 1;
+                n.face = -1;
+
+                this.hc -= dt;
+
+                if (this.hc <= 0) {
+
+                    this.hc = 0.18;
+
+                    const mx =
+                        (
+                            p.x +
+                            n.x
+                        ) / 2;
+
+                    this.fx.push({
+                        x:
+                            mx +
+                            (
+                                Math.random() -
+                                0.5
+                            ) * 120,
+
+                        y:
+                            GY - 200,
+
+                        vy:
+                            -70 -
+                            Math.random() * 50,
+
+                        l: 2.5
+                    });
+                }
+
+                if (this.st > 6) {
+                    this.state = "done";
+                }
+
+            } else {
+
+                p.update(
+                    dt,
+                    inp,
+                    this.solids
+                );
+
+                p.x =
+                    Math.max(
+                        40,
+                        Math.min(
+                            1240,
+                            p.x
+                        )
+                    );
+
+                if (
+                    Math.abs(
+                        p.x - 1190
+                    ) < 50 &&
+                    !this.end
+                ) {
+
+                    this.end = true;
+
+                    this.goto(
+                        "planet"
+                    );
+                }
+            }
+        }
+
+        for (
+            const f of this.fx
+        ) {
+
+            f.y +=
+                f.vy * dt;
+
+            f.l -= dt;
+        }
+
+        this.fx =
+            this.fx.filter(
+                f => f.l > 0
+            );
+    }
+
+    draw(c) {
+
+        const p = this.p;
+        const n = this.n;
+        const t = this.t;
+
+        let k = 0;
+
+        if (
+            this.state === "meet"
+        ) {
+
+            k =
+                Math.min(
+                    1,
+                    this.st / 2
+                );
+
+        } else if (
+            this.state === "done"
+        ) {
+
+            k =
+                Math.max(
+                    0,
+                    1 -
+                    (
+                        this.st - 6
+                    ) / 1.5
+                );
+        }
+
+        k =
+            k * k *
+            (3 - 2 * k);
+
+        const g =
+            c.createLinearGradient(
+                0,
+                0,
+                0,
+                720
+            );
+
+        g.addColorStop(
+            0,
+            "#0b0a2e"
+        );
+
+        g.addColorStop(
+            0.7,
+            "#3a1d5c"
+        );
+
+        g.addColorStop(
+            1,
+            "#7a3a6a"
+        );
+
+        c.fillStyle = g;
+
+        c.fillRect(
+            0,
+            0,
+            1280,
+            720
+        );
+
+        c.save();
+
+        c.translate(
+            640,
+            470
+        );
+
+        c.scale(
+            1 + 0.55 * k,
+            1 + 0.55 * k
+        );
+
+        c.translate(
+            -(
+                640 +
+                (
+                    (
+                        p.x +
+                        n.x
+                    ) / 2 -
+                    640
+                ) * k
+            ),
+            -470
+        );
+
+        // Stars
+        c.fillStyle =
+            "#fff";
+
+        for (
+            const s of this.stars
+        ) {
+
+            c.globalAlpha =
+                0.5 +
+                0.5 *
+                Math.sin(
+                    t * 2 +
+                    s.x
+                );
+
+            c.beginPath();
+
+            c.arc(
+                s.x,
+                s.y,
+                s.r,
+                0,
+                7
+            );
+
+            c.fill();
+        }
+
+        c.globalAlpha = 1;
+
+        // Moon
+        c.fillStyle =
+            "#fff6d8";
+
+        c.beginPath();
+
+        c.arc(
+            1000,
+            130,
+            46,
+            0,
+            7
+        );
+
+        c.fill();
+
+        // Trees
+        for (
+            let i = -1;
+            i < 9;
+            i++
+        ) {
+
+            tree(
+                c,
+                i * 170 + 40,
+                GY,
+                330 +
+                    (
+                        (
+                            i * 37 % 5 +
+                            5
+                        ) % 5
+                    ) * 30,
+                "#1b1440"
+            );
+        }
+
+        for (
+            let i = 0;
+            i < 7;
+            i++
+        ) {
+
+            tree(
+                c,
+                i * 210 + 110,
+                GY + 30,
+                280,
+                "#2a1d5c"
+            );
+        }
+
+        // Ground
+        const gr =
+            c.createLinearGradient(
+                0,
+                GY,
+                0,
+                720
+            );
+
+        gr.addColorStop(
+            0,
+            "#2f5f45"
+        );
+
+        gr.addColorStop(
+            1,
+            "#14301f"
+        );
+
+        c.fillStyle = gr;
+
+        c.fillRect(
+            -300,
+            GY,
+            1900,
+            200
+        );
+
+        c.fillStyle =
+            "#5fbf6b";
+
+        c.fillRect(
+            -300,
+            GY,
+            1900,
+            6
+        );
+
+        // Tables
+        c.fillStyle =
+            "#6b4a3a";
+
+        c.fillRect(
+            330,
+            GY - 34,
+            150,
+            14
+        );
+
+        c.fillRect(
+            345,
+            GY - 20,
+            12,
+            20
+        );
+
+        c.fillRect(
+            455,
+            GY - 20,
+            12,
+            20
+        );
+
+        c.fillRect(
+            740,
+            GY - 70,
+            170,
+            14
+        );
+
+        c.fillRect(
+            755,
+            GY - 56,
+            12,
+            56
+        );
+
+        c.fillRect(
+            885,
+            GY - 56,
+            12,
+            56
+        );
+
+        // Chairs / objects
+        c.fillStyle =
+            "#fff";
+
+        c.fillRect(
+            780,
+            GY - 84,
+            22,
+            14
+        );
+
+        c.fillRect(
+            840,
+            GY - 84,
+            22,
+            14
+        );
+
+        // Fire
+        const fl =
+            1 +
+            0.15 *
+            Math.sin(t * 17) +
+            0.1 *
+            Math.sin(t * 9);
+
+        const fg =
+            c.createRadialGradient(
+                620,
+                GY - 30,
+                5,
+                620,
+                GY - 30,
+                220 * fl
+            );
+
+        fg.addColorStop(
+            0,
+            "rgba(255,170,60,.55)"
+        );
+
+        fg.addColorStop(
+            1,
+            "rgba(255,170,60,0)"
+        );
+
+        c.fillStyle = fg;
+
+        c.fillRect(
+            300,
+            GY - 300,
+            640,
+            400
+        );
+
+        c.fillStyle =
+            "#4a2f20";
+
+        c.fillRect(
+            585,
+            GY - 12,
+            70,
+            12
+        );
+
+        c.fillStyle =
+            "#ff7a1a";
+
+        c.beginPath();
+
+        c.ellipse(
+            620,
+            GY - 32,
+            22 * fl,
+            34 * fl,
+            0,
+            0,
+            7
+        );
+
+        c.fill();
+
+        c.fillStyle =
+            "#ffd24a";
+
+        c.beginPath();
+
+        c.ellipse(
+            620,
+            GY - 26,
+            12 * fl,
+            22 * fl,
+            0,
+            0,
+            7
+        );
+
+        c.fill();
+
+        // Portal
+        if (
+            this.state === "done"
+        ) {
+
+            const a =
+                Math.min(
+                    1,
+                    this.st - 6
+                );
+
+            c.globalAlpha =
+                Math.max(
+                    0,
+                    a
+                );
+
+            c.fillStyle =
+                "#ff9be0";
+
+            c.beginPath();
+
+            c.ellipse(
+                1190,
+                GY - 90,
+                45,
+                90,
+                0,
+                0,
+                7
+            );
+
+            c.fill();
+
+            c.globalAlpha = 1;
+        }
+
+        n.draw(c);
+        p.draw(c);
+
+        // Hearts
+        for (
+            const f of this.fx
+        ) {
+
+            c.globalAlpha =
+                Math.min(
+                    1,
+                    f.l
+                );
+
+            heart(
+                c,
+                f.x,
+                f.y,
+                16,
+                "#ff5082"
+            );
+        }
+
+        c.globalAlpha = 1;
+
+        // Fireflies
+        for (
+            let i = 0;
+            i < 25;
+            i++
+        ) {
+
+            const x =
+                (
+                    i * 53 +
+                    t * 8 *
+                    (1 + i % 3)
+                ) % 1280;
+
+            const y =
+                250 +
+                (i * 61) % 350 +
+                Math.sin(
+                    t + i
+                ) * 15;
+
+            c.fillStyle =
+                `rgba(255,246,168,${0.4 + 0.4 * Math.sin(t * 2 + i)})`;
+
+            c.beginPath();
+
+            c.arc(
+                x,
+                y,
+                2.5,
+                0,
+                7
+            );
+
+            c.fill();
+        }
+
+        c.restore();
+
+        // Text
+        c.fillStyle =
+            "#fff";
+
+        c.font =
+            "bold 30px system-ui,sans-serif";
+
+        c.textAlign =
+            "center";
+
+        c.shadowColor =
+            "#000a";
+
+        c.shadowBlur = 8;
+
+        if (
+            this.state === "walk"
+        ) {
+
+            c.fillText(
+                "Іди вправо →",
+                640,
+                90
+            );
+        }
+
+        if (
+            this.state === "meet" &&
+            this.st > 1.5
+        ) {
+
+            c.fillText(
+                "Нарешті ми разом ❤️",
+                640,
+                100
+            );
+        }
+
+        if (
+            this.state === "done"
+        ) {
+
+            c.fillText(
+                "Іди в портал →",
+                640,
+                100
+            );
+        }
+
+        c.shadowBlur = 0;
+        c.textAlign = "left";
+
+        // Fade in
+        if (t < 0.8) {
+
+            c.fillStyle =
+                `rgba(0,0,0,${1 - t / 0.8})`;
+
+            c.fillRect(
+                0,
+                0,
+                1280,
+                720
+            );
+        }
+    }
+}
+
+
+// ============================================================
+// LOVE PLANET
+// ============================================================
+
+const PHOTOS = [
+    {
+        file: "assets/photos/photo1.jpg",
+        caption: "Наше перше фото ❤️"
+    }
+];
+
+const LW = 5000;
+
+const PH = {
+    x: 2400,
+    y: 260
+};
+
+const LP = [
+    [500, 510],
+    [820, 420],
+    [1150, 510],
+    [1700, 500],
+    [2000, 400],
+    [2300, 310],
+    [2650, 400],
+    [3100, 500],
+    [3450, 400],
+    [3750, 310],
+    [4050, 420]
+];
+
+const NG = [
+    [300, 580],
+    [560, 470],
+    [880, 380],
+    [1200, 470],
+    [1500, 580],
+    [1760, 460],
+    [2060, 360],
+    [2700, 360],
+    [3150, 460],
+    [3500, 360],
+    [4100, 380],
+    [4400, 580]
+];
+
+class LovePlanet {
+
+    constructor(
+        save,
+        onSave,
+        goto
+    ) {
+
+        Object.assign(this, {
+            onSave,
+            goto,
+
+            t: 0,
+            cam: 0,
+
+            fx: [],
+            sf: [],
+
+            cnt: 0,
+
+            view: 0,
+
+            hc: 0,
+            hh: 0,
+
+            idle: 0,
+
+            pi: true,
+            pjp: true,
+
+            shut: false,
+
+            end: false,
+            near: false,
+            ok: false
+        });
+
+        this.ph =
+            save.photos &&
+            save.photos.planet
+                ? "got"
+                : "wait";
+
+        this.solids = [
+            {
+                x: 0,
+                y: GY,
+                w: LW,
+                h: 200
+            },
+
+            ...LP.map(
+                ([x, y]) => ({
+                    x,
+                    y,
+                    w: 200,
+                    h: 20,
+                    p: true
+                })
+            )
+        ];
+
+        this.ng =
+            NG.map(
+                ([x, y]) => ({
+                    x,
+                    y,
+                    got: false
+                })
+            );
+
+        this.p =
+            new Player(
+                120,
+                GY
+            );
+
+        this.n =
+            new Player(
+                50,
+                GY,
+                "assets/characters/me_head.png",
+                "#4a8fe0",
+                false
+            );
+
+        this.img =
+            new Image();
+
+        this.img.onload =
+            () => this.ok = true;
+
+        this.img.src =
+            PHOTOS[0].file;
+
+        this.stars =
+            Array.from(
+                { length: 120 },
+                (_, i) => ({
+                    x:
+                        (i * 211) %
+                        1280,
+
+                    y:
+                        (i * 97) %
+                        460,
+
+                    r:
+                        1 +
+                        i % 3,
+
+                    f:
+                        0.5 +
+                        i % 4 * 0.4
+                })
+            );
+
+        this.ff =
+            Array.from(
+                { length: 30 },
+                (_, i) => ({
+                    x:
+                        (i * 337) %
+                        1380,
+
+                    y:
+                        150 +
+                        (i * 91) %
+                        450,
+
+                    s:
+                        0.6 +
+                        (i % 5) * 0.2,
+
+                    p: i
+                })
+            );
+
+        const on = e => {
+
+            if (
+                e.type === "pointerdown" ||
+                e.code === "Escape" ||
+                e.code === "Enter"
+            ) {
+                this.shut = true;
+            }
+        };
+
+        addEventListener(
+            "keydown",
+            on
+        );
+
+        document
+            .getElementById("game")
+            .addEventListener(
+                "pointerdown",
+                on
+            );
+    }
+
+    update(dt, inp) {
+
+        this.t += dt;
+
+        const p = this.p;
+        const n = this.n;
+
+        const e =
+            inp.interact &&
+            !this.pi;
+
+        const j =
+            inp.jump &&
+            !this.pjp;
+
+        this.pi =
+            inp.interact;
+
+        this.pjp =
+            inp.jump;
+
+        if (
+            this.ph === "view"
+        ) {
+
+            this.view += dt;
+            this.hc -= dt;
+
+            if (this.hc <= 0) {
+
+                this.hc = 0.06;
+
+                this.sf.push({
+                    x:
+                        Math.random() *
+                        1280,
+
+                    y: 740,
+
+                    vy:
+                        -130 -
+                        Math.random() * 170,
+
+                    l: 4,
+
+                    s:
+                        10 +
+                        Math.random() * 16
+                });
+            }
+
+            if (
+                this.view > 0.9 &&
+                (e || j || this.shut)
+            ) {
+
+                this.ph = "got";
+            }
+
+            this.shut = false;
+
+        } else {
+
+            p.update(
+                dt,
+                inp,
+                this.solids
+            );
+
+            p.x =
+                Math.max(
+                    30,
+                    Math.min(
+                        LW - 30,
+                        p.x
+                    )
+                );
+
+            this.near =
+                this.ph === "wait" &&
+                Math.abs(
+                    p.x - PH.x
+                ) < 70 &&
+                Math.abs(
+                    p.y - 60 - PH.y
+                ) < 100;
+
+            if (
+                this.near &&
+                e
+            ) {
+
+                this.ph = "view";
+                this.view = 0;
+                this.shut = false;
+
+                this.onSave({
+                    photos: {
+                        planet: true
+                    }
+                });
+            }
+
+            const d =
+                p.x - n.x;
+
+            const ad =
+                Math.abs(d);
+
+            let ax = 0;
+
+            if (ad > 150) {
+                ax = Math.sign(d);
+
+            } else if (ad < 70) {
+
+                ax =
+                    -Math.sign(d) * 0.5;
+
+            }
+
+            if (
+                Math.abs(p.vx) < 5 &&
+                ad < 220 &&
+                ad >= 70
+            ) {
+                ax = 0;
+            }
+
+            this.idle =
+                ax
+                    ? 0
+                    : this.idle + dt;
+
+            let jm =
+                n.ground &&
+                p.y < n.y - 60 &&
+                ad < 300;
+
+            if (this.idle > 5) {
+
+                this.idle = 0;
+
+                jm =
+                    n.ground;
+            }
+
+            n.update(
+                dt,
+                {
+                    ax,
+
+                    run:
+                        Math.abs(
+                            p.vx
+                        ) > 300 ||
+                        ad > 420,
+
+                    jump: jm,
+                    attack: false
+                },
+                this.solids
+            );
+
+            n.x =
+                Math.max(
+                    30,
+                    Math.min(
+                        LW - 30,
+                        n.x
+                    )
+                );
+
+            if (ad > 1000) {
+
+                n.x =
+                    p.x - 80;
+
+                n.y =
+                    p.y;
+
+                n.vy = 0;
+            }
+
+            if (!ax) {
+                n.face =
+                    Math.sign(d) || 1;
+            }
+
+            this.hh -= dt;
+
+            if (
+                !ax &&
+                ad < 220 &&
+                Math.abs(p.vx) < 5 &&
+                this.hh <= 0
+            ) {
+
+                this.hh = 1.2;
+
+                this.fx.push({
+                    k: "h",
+
+                    x:
+                        (p.x + n.x) / 2,
+
+                    y:
+                        p.y - 150,
+
+                    vy: -50,
+
+                    l: 1.6
+                });
+            }
+
+            // Nuggets
+            for (
+                const g of this.ng
+            ) {
+
+                if (
+                    !g.got &&
+                    Math.abs(
+                        g.x - p.x
+                    ) < 50 &&
+                    Math.abs(
+                        g.y -
+                        (p.y - 55)
+                    ) < 70
+                ) {
+
+                    g.got = true;
+
+                    this.cnt++;
+
+                    this.fx.push({
+                        k: "t",
+
+                        x: g.x,
+
+                        y:
+                            g.y - 20,
+
+                        vy: -90,
+
+                        l: 1,
+
+                        tx: "+1"
+                    });
+
+                    for (
+                        let i = 0;
+                        i < 8;
+                        i++
+                    ) {
+
+                        const a =
+                            i / 8 *
+                            6.283;
+
+                        this.fx.push({
+                            k: "s",
+
+                            x: g.x,
+                            y: g.y,
+
+                            vx:
+                                Math.cos(a) *
+                                160,
+
+                            vy:
+                                Math.sin(a) *
+                                160,
+
+                            l: 0.6
+                        });
+                    }
+                }
+            }
+
+            if (
+                this.ph === "got" &&
+                !this.end &&
+                Math.abs(
+                    p.x - 4700
+                ) < 50
+            ) {
+                this.end = true;
+            }
+        }
+
+        // Effects
+        for (
+            const f of this.fx
+        ) {
+
+            f.x +=
+                (f.vx || 0) *
+                dt;
+
+            f.y +=
+                f.vy * dt;
+
+            f.l -= dt;
+        }
+
+        this.fx =
+            this.fx.filter(
+                f => f.l > 0
+            );
+
+        for (
+            const f of this.sf
+        ) {
+
+            f.y +=
+                f.vy * dt;
+
+            f.l -= dt;
+        }
+
+        this.sf =
+            this.sf.filter(
+                f => f.l > 0
+            );
+
+        const tg =
+            Math.max(
+                0,
+                Math.min(
+                    LW - 1280,
+                    p.x - 640
+                )
+            );
+
+        this.cam +=
+            (
+                tg - this.cam
+            ) *
+            Math.min(
+                1,
+                dt * 5
+            );
+    }
+
+    draw(c) {
+
+        const t = this.t;
+        const cam = this.cam;
+        const p = this.p;
+
+        const open =
+            this.ph === "got";
+
+        const dot =
+            (x, y, r) => {
+
+                c.beginPath();
+
+                c.arc(
+                    x,
+                    y,
+                    r,
+                    0,
+                    7
+                );
+
+                c.fill();
+            };
+
+        // Sky
+        const g =
+            c.createLinearGradient(
+                0,
+                0,
+                0,
+                720
+            );
+
+        g.addColorStop(
+            0,
+            "#1d0a3e"
+        );
+
+        g.addColorStop(
+            0.5,
+            "#7a2f93"
+        );
+
+        g.addColorStop(
+            1,
+            "#ff9ad0"
+        );
+
+        c.fillStyle = g;
+
+        c.fillRect(
+            0,
+            0,
+            1280,
+            720
+        );
+
+        // Stars
+        c.fillStyle =
+            "#fff";
+
+        for (
+            const s of this.stars
+        ) {
+
+            c.globalAlpha =
+                0.3 +
+                0.7 *
+                Math.abs(
+                    Math.sin(
+                        t * s.f +
+                        s.x
+                    )
+                );
+
+            c.fillRect(
+                s.x,
+                s.y,
+                s.r,
+                s.r
+            );
+        }
+
+        c.globalAlpha = 1;
+
+        // Planet
+        const px =
+            900 -
+            cam * 0.06;
+
+        const py = 290;
+
+        const pg =
+            c.createRadialGradient(
+                px - 70,
+                py - 70,
+                20,
+                px,
+                py,
+                230
+            );
+
+        pg.addColorStop(
+            0,
+            "#ffc2e6"
+        );
+
+        pg.addColorStop(
+            0.6,
+            "#d66ab8"
+        );
+
+        pg.addColorStop(
+            1,
+            "#6a2a8a"
+        );
+
+        c.fillStyle = pg;
+
+        dot(
+            px,
+            py,
+            220
+        );
+
+        heart(
+            c,
+            px + 10,
+            py + 10,
+            70,
+            "rgba(255,255,255,.22)"
+        );
+
+        // Planet ring
+        c.strokeStyle =
+            "rgba(255,220,245,.45)";
+
+        c.lineWidth = 14;
+
+        c.beginPath();
+
+        c.ellipse(
+            px,
+            py,
+            340,
+            62,
+            -0.35,
+            0,
+            7
+        );
+
+        c.stroke();
+
+        // Moon
+        const mx =
+            230 -
+            cam * 0.04;
+
+        c.fillStyle =
+            "#fff6d8";
+
+        dot(
+            mx,
+            150,
+            48
+        );
+
+        c.fillStyle =
+            "rgba(200,180,150,.5)";
+
+        dot(
+            mx - 14,
+            140,
+            10
+        );
+
+        dot(
+            mx + 12,
+            164,
+            7
+        );
+
+        // Floating planets
+        for (
+            const [x, y, r, col] of [
+                [430, 340, 26, "#7ad7ff"],
+                [1120, 110, 18, "#ffd36b"],
+                [620, 90, 14, "#b9a0ff"]
+            ]
+        ) {
+
+            c.fillStyle = col;
+
+            dot(
+                x - cam * 0.1,
+                y,
+                r
+            );
+        }
+
+        // Floating islands
+        {
+            const gap = 460;
+            const off =
+                cam * 0.25;
+
+            const i0 =
+                Math.floor(
+                    off / gap
+                );
+
+            for (
+                let i = i0;
+                i <
+                i0 + 4;
+                i++
+            ) {
+
+                const x =
+                    i * gap -
+                    off +
+                    (
+                        i * 53 % 120
+                    );
+
+                const y =
+                    380 +
+                    (
+                        i * 37 % 5
+                    ) * 25;
+
+                c.fillStyle =
+                    "#4a2275";
+
+                c.beginPath();
+
+                c.moveTo(
+                    x - 90,
+                    y
+                );
+
+                c.lineTo(
+                    x + 90,
+                    y
+                );
+
+                c.lineTo(
+                    x + 15,
+                    y + 95
+                );
+
+                c.fill();
+
+                c.fillStyle =
+                    "#b86ad8";
+
+                c.fillRect(
+                    x - 90,
+                    y - 8,
+                    180,
+                    10
+                );
+
+                c.fillStyle =
+                    "rgba(255,170,230,.5)";
+
+                dot(
+                    x,
+                    y - 38,
+                    26
+                );
+
+                c.fillStyle =
+                    "rgba(255,230,250,.8)";
+
+                dot(
+                    x,
+                    y - 38,
+                    13
+                );
+            }
+        }
+
+        // Glowing trees
+        {
+            const gap = 260;
+            const off =
+                cam * 0.6;
+
+            const i0 =
+                Math.floor(
+                    off / gap
+                );
+
+            for (
+                let i = i0;
+                i <
+                i0 + 6;
+                i++
+            ) {
+
+                const x =
+                    i * gap -
+                    off +
+                    (
+                        i * 71 % 80
+                    );
+
+                const h =
+                    110 +
+                    (
+                        i * 37 % 4
+                    ) * 30;
+
+                c.fillStyle =
+                    "#3a1a5a";
+
+                c.fillRect(
+                    x - 7,
+                    GY - h,
+                    14,
+                    h
+                );
+
+                c.fillStyle =
+                    "rgba(255,155,224,.35)";
+
+                dot(
+                    x,
+                    GY - h,
+                    62
+                );
+
+                c.fillStyle =
+                    "rgba(255,208,240,.7)";
+
+                dot(
+                    x,
+                    GY - h,
+                    34
+                );
+            }
+        }
+
+        c.save();
+
+        c.translate(
+            -cam,
+            0
+        );
+
+        // Ground
+        const gr =
+            c.createLinearGradient(
+                0,
+                GY,
+                0,
+                720
+            );
+
+        gr.addColorStop(
+            0,
+            "#8a45b0"
+        );
+
+        gr.addColorStop(
+            1,
+            "#2a1050"
+        );
+
+        c.fillStyle = gr;
+
+        c.fillRect(
+            cam - 10,
+            GY,
+            1300,
+            200
+        );
+
+        c.fillStyle =
+            "#ff9be0";
+
+        c.fillRect(
+            cam - 10,
+            GY,
+            1300,
+            6
+        );
+
+        // Crystals
+        for (
+            let x =
+                Math.floor(
+                    cam / 170
+                ) * 170;
+
+            x <
+                cam + 1300;
+
+            x += 170
+        ) {
+
+            const h =
+                30 +
+                (
+                    (
+                        x / 170 * 13
+                    ) % 4
+                ) * 14;
+
+            c.fillStyle =
+                x / 170 % 2
+                    ? "#7ee8ff"
+                    : "#ff8ae0";
+
+            c.globalAlpha = 0.2;
+
+            dot(
+                x + 10,
+                GY - h / 2,
+                h * 0.8
+            );
+
+            c.globalAlpha = 0.9;
+
+            c.beginPath();
+
+            c.moveTo(
+                x - 12,
+                GY
+            );
+
+            c.lineTo(
+                x,
+                GY - h
+            );
+
+            c.lineTo(
+                x + 12,
+                GY
+            );
+
+            c.fill();
+
+            c.globalAlpha = 1;
+        }
+
+        // Platforms
+        for (
+            const s of this.solids
+        ) {
+
+            if (!s.p) {
+                continue;
+            }
+
+            c.fillStyle =
+                "#4a2275";
+
+            c.beginPath();
+
+            c.moveTo(
+                s.x,
+                s.y + s.h
+            );
+
+            c.lineTo(
+                s.x + s.w,
+                s.y + s.h
+            );
+
+            c.lineTo(
+                s.x +
+                    s.w / 2 +
+                    20,
+                s.y +
+                    s.h +
+                    75
+            );
+
+            c.lineTo(
+                s.x +
+                    s.w / 2 -
+                    25,
+                s.y +
+                    s.h +
+                    60
+            );
+
+            c.fill();
+
+            c.fillStyle =
+                "#b86ad8";
+
+            c.fillRect(
+                s.x,
+                s.y,
+                s.w,
+                s.h
+            );
+
+            c.fillStyle =
+                "#ff9be0";
+
+            c.fillRect(
+                s.x,
+                s.y,
+                s.w,
+                6
+            );
+        }
+
+        // Nuggets
+        c.font =
+            "34px system-ui,sans-serif";
+
+        c.textAlign =
+            "center";
+
+        for (
+            const q of this.ng
+        ) {
+
+            if (!q.got) {
+
+                const y =
+                    q.y +
+                    Math.sin(
+                        t * 3 +
+                        q.x
+                    ) * 5;
+
+                c.fillStyle =
+                    "rgba(255,220,100,.25)";
+
+                dot(
+                    q.x,
+                    y - 10,
+                    26
+                );
+
+                c.fillStyle =
+                    "#fff";
+
+                c.fillText(
+                    "🍗",
+                    q.x,
+                    y
+                );
+            }
+        }
+
+        // Photo
+        if (
+            this.ph === "wait"
+        ) {
+
+            const y =
+                PH.y +
+                Math.sin(
+                    t * 2.5
+                ) * 8;
+
+            c.fillStyle =
+                `rgba(255,200,240,${0.25 + 0.15 * Math.sin(t * 4)})`;
+
+            dot(
+                PH.x,
+                y,
+                48
+            );
+
+            c.fillStyle =
+                "#fff";
+
+            c.fillRect(
+                PH.x - 24,
+                y - 30,
+                48,
+                58
+            );
+
+            c.fillStyle =
+                "#ffb3dc";
+
+            c.fillRect(
+                PH.x - 19,
+                y - 25,
+                38,
+                38
+            );
+
+            c.fillStyle =
+                "#fff";
+
+            c.fillText(
+                "📸",
+                PH.x,
+                y + 8
+            );
+        }
+
+        // Portal
+        c.fillStyle =
+            open
+                ? "#ff9be0"
+                : "#555";
+
+        c.globalAlpha =
+            open
+                ? 0.7 +
+                    0.2 *
+                    Math.sin(
+                        t * 4
+                    )
+                : 0.6;
+
+        c.beginPath();
+
+        c.ellipse(
+            4700,
+            GY - 90,
+            45,
+            90,
+            0,
+            0,
+            7
+        );
+
+        c.fill();
+
+        c.globalAlpha = 1;
+
+        this.n.draw(c);
+        p.draw(c);
+
+        // Effects
+        for (
+            const f of this.fx
+        ) {
+
+            c.globalAlpha =
+                Math.max(
+                    0,
+                    Math.min(
+                        1,
+                        f.l
+                    )
+                );
+
+            if (
+                f.k === "h"
+            ) {
+
+                heart(
+                    c,
+                    f.x,
+                    f.y,
+                    14,
+                    "#ff5082"
+                );
+
+            } else if (
+                f.k === "t"
+            ) {
+
+                c.fillStyle =
+                    "#fff3a0";
+
+                c.font =
+                    "bold 26px system-ui,sans-serif";
+
+                c.fillText(
+                    f.tx,
+                    f.x,
+                    f.y
+                );
+
+            } else {
+
+                c.fillStyle =
+                    "#fff6b0";
+
+                c.beginPath();
+
+                c.moveTo(
+                    f.x,
+                    f.y - 7
+                );
+
+                c.lineTo(
+                    f.x + 3,
+                    f.y
+                );
+
+                c.lineTo(
+                    f.x,
+                    f.y + 7
+                );
+
+                c.lineTo(
+                    f.x - 3,
+                    f.y
+                );
+
+                c.fill();
+            }
+        }
+
+        c.globalAlpha = 1;
+
+        c.restore();
+
+        // Floating hearts
+        for (
+            let i = 0;
+            i < 30;
+            i++
+        ) {
+
+            const x =
+                (i * 131) %
+                    1280 +
+                Math.sin(
+                    t + i
+                ) * 20;
+
+            const y =
+                720 -
+                (
+                    t *
+                    20 *
+                    (1 + i % 3) +
+                    i * 83
+                ) % 760;
+
+            heart(
+                c,
+                x,
+                y,
+                7 + i % 3 * 2,
+                "rgba(255,140,200,.35)"
+            );
+        }
+
+        // Foreground glow
+        const fg =
+            c.createLinearGradient(
+                0,
+                470,
+                0,
+                720
+            );
+
+        fg.addColorStop(
+            0,
+            "rgba(255,170,230,0)"
+        );
+
+        fg.addColorStop(
+            1,
+            "rgba(255,170,230,.28)"
+        );
+
+        c.fillStyle = fg;
+
+        c.fillRect(
+            0,
+            470,
+            1280,
+            250
+        );
+
+        // Fireflies
+        for (
+            const f of this.ff
+        ) {
+
+            const x =
+                (
+                    (
+                        f.x -
+                        cam * 0.9
+                    ) % 1380 +
+                    1380
+                ) % 1380 - 50;
+
+            const y =
+                f.y +
+                Math.sin(
+                    t * f.s +
+                    f.p
+                ) * 20;
+
+            const a =
+                0.5 +
+                0.5 *
+                Math.sin(
+                    t * 2 +
+                    f.p
+                );
+
+            c.fillStyle =
+                `rgba(255,246,168,${0.15 * a})`;
+
+            dot(
+                x,
+                y,
+                10
+            );
+
+            c.fillStyle =
+                `rgba(255,250,200,${0.4 + 0.5 * a})`;
+
+            dot(
+                x,
+                y,
+                3
+            );
+        }
+
+        // HUD
+        c.textAlign =
+            "left";
+
+        c.fillStyle =
+            "#fff";
+
+        c.font =
+            "bold 26px system-ui,sans-serif";
+
+        c.shadowColor =
+            "#0008";
+
+        c.shadowBlur = 6;
+
+        c.fillText(
+            `🍗 Nuggets: ${this.cnt}/${NG.length}`,
+            40,
+            52
+        );
+
+        c.fillText(
+            `📸 Photos: ${this.ph === "wait" ? 0 : 1}/1`,
+            40,
+            90
+        );
+
+        c.font =
+            "20px system-ui,sans-serif";
+
+        if (
+            this.ph === "wait"
+        ) {
+
+            c.fillText(
+                "Підказка: шукай там, де острів найвищий ✨",
+                40,
+                126
+            );
+        }
+
+        c.textAlign =
+            "center";
+
+        c.font =
+            "bold 28px system-ui,sans-serif";
+
+        if (this.near) {
+
+            c.fillText(
+                "📸 Переглянути (E)",
+                p.x - cam,
+                p.y - 190
+            );
+        }
+
+        if (this.end) {
+
+            c.fillText(
+                "🍳 Літня кухня Даші — наступний етап скоро ✨",
+                640,
+                100
+            );
+
+        } else if (
+            p.x > 4200
+        ) {
+
+            c.fillText(
+                open
+                    ? "Іди в портал ✨"
+                    : "🔒 Спочатку знайди наше фото 📸",
+                640,
+                100
+            );
+        }
+
+        c.shadowBlur = 0;
+        c.textAlign = "left";
+
+        // Photo viewer
+        if (
+            this.ph === "view"
+        ) {
+
+            const v =
+                this.view;
+
+            const k =
+                Math.min(
+                    1,
+                    v / 0.6
+                );
+
+            const e =
+                1 +
+                2.70158 *
+                    Math.pow(
+                        k - 1,
+                        3
+                    ) +
+                1.70158 *
+                    Math.pow(
+                        k - 1,
+                        2
+                    );
+
+            c.fillStyle =
+                `rgba(10,0,30,${Math.min(.75, v * 2)})`;
+
+            c.fillRect(
+                0,
+                0,
+                1280,
+                720
+            );
+
+            c.save();
+
+            c.translate(
+                640,
+                370
+            );
+
+            c.rotate(
+                -0.05 *
+                (1 - k)
+            );
+
+            c.scale(
+                e,
+                e
+            );
+
+            c.shadowColor =
+                "#000a";
+
+            c.shadowBlur = 30;
+
+            c.fillStyle =
+                "#fff";
+
+            c.fillRect(
+                -280,
+                -250,
+                560,
+                440
+            );
+
+            c.shadowBlur = 0;
+
+            if (this.ok) {
+
+                const iw =
+                    this.img.width;
+
+                const ih =
+                    this.img.height;
+
+                const s =
+                    Math.min(
+                        520 / iw,
+                        350 / ih
+                    );
+
+                c.drawImage(
+                    this.img,
+                    -iw * s / 2,
+                    -230 +
+                        (
+                            350 -
+                            ih * s
+                        ) / 2,
+                    iw * s,
+                    ih * s
+                );
+
+            } else {
+
+                c.fillStyle =
+                    "#ffd0e8";
+
+                c.fillRect(
+                    -260,
+                    -230,
+                    520,
+                    350
+                );
+
+                c.fillStyle =
+                    "#a03a80";
+
+                c.font =
+                    "bold 22px system-ui,sans-serif";
+
+                c.textAlign =
+                    "center";
+
+                c.fillText(
+                    "📸 Поклади фото в assets/photos/photo1.jpg",
+                    0,
+                    -50
+                );
+            }
+
+            c.fillStyle =
+                "#a03a80";
+
+            c.font =
+                "bold 30px system-ui,sans-serif";
+
+            c.textAlign =
+                "center";
+
+            c.fillText(
+                PHOTOS[0].caption,
+                0,
+                165
+            );
+
+            c.restore();
+
+            // Photo particles
+            for (
+                const f of this.sf
+            ) {
+
+                heart(
+                    c,
+                    f.x,
+                    f.y,
+                    f.s,
+                    `rgba(255,90,150,${Math.min(.85, f.l)})`
+                );
+            }
+
+            c.fillStyle =
+                "#fff";
+
+            c.font =
+                "bold 34px system-ui,sans-serif";
+
+            c.textAlign =
+                "center";
+
+            c.fillText(
+                "Ти знайшла наше фото! ❤️",
+                640,
+                60
+            );
+
+            if (
+                v > 0.9
+            ) {
+
+                c.globalAlpha =
+                    0.6 +
+                    0.4 *
+                    Math.sin(
+                        t * 5
+                    );
+
+                c.font =
+                    "22px system-ui,sans-serif";
+
+                c.fillText(
+                    "Натисни E, Space або тапни — продовжити",
+                    640,
+                    700
+                );
+
+                c.globalAlpha = 1;
+            }
+
+            c.textAlign =
+                "left";
+        }
+    }
+}
+
+
+// ============================================================
+// MAIN
+// ============================================================
+
+const KEY =
+    "ola_save_v1";
+
+const cv =
+    document.getElementById(
+        "game"
+    );
+
+const ctx =
+    cv.getContext("2d");
+
+let save = {};
+
+try {
+
+    save =
+        JSON.parse(
+            localStorage.getItem(
+                KEY
+            )
+        ) || {};
+
+} catch (e) {}
+
+const store = () => {
+
+    try {
+
+        localStorage.setItem(
+            KEY,
+            JSON.stringify(save)
+        );
+
+    } catch (e) {}
+};
+
+const onSave = s => {
+
+    save = {
+        ...save,
+        ...s
+    };
+
+    store();
+};
+
+
+// ============================================================
+// CANVAS SIZE
+// ============================================================
+
+function fit() {
+
+    const s =
+        Math.min(
+            innerWidth / 1280,
+            innerHeight / 720
+        );
+
+    cv.style.width =
+        1280 * s + "px";
+
+    cv.style.height =
+        720 * s + "px";
+}
+
+addEventListener(
+    "resize",
+    fit
+);
+
+fit();
+
+initTouch();
+
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+
+let scene = null;
+let last = 0;
+let acc = 0;
+let running = false;
+
+const STEP =
+    1 / 60;
+
+function goScene(n) {
+
+    onSave({
+        level: n
+    });
+
+    scene =
+        n === "meeting"
+            ? new Meeting(
+                save,
+                onSave,
+                goScene
+            )
+            : n === "planet"
+                ? new LovePlanet(
+                    save,
+                    onSave,
+                    goScene
+                )
+                : new Forest(
+                    save,
+                    onSave,
+                    goScene
+                );
+}
+
+function loop(t) {
+
+    requestAnimationFrame(
+        loop
+    );
+
+    const dt =
+        Math.min(
+            0.1,
+            (t - last) / 1000 || 0
+        );
+
+    last = t;
+    acc += dt;
+
+    poll();
+
+    while (
+        acc >= STEP
+    ) {
+
+        scene.update(
+            STEP,
+            input
+        );
+
+        acc -= STEP;
+    }
+
+    scene.draw(
+        ctx
+    );
+}
+
+
+// ============================================================
+// START GAME
+// ============================================================
+
+function startGame() {
+
+    try {
+
+        (
+            window.audioCtx =
+            new (
+                window.AudioContext ||
+                window.webkitAudioContext
+            )()
+        ).resume();
+
+    } catch (e) {}
+
+    document
+        .getElementById(
+            "start"
+        )
+        .style.display = "none";
+
+    document.body
+        .classList
+        .add("playing");
+
+    goScene(
+        location.hash === "#planet"
+            ? "planet"
+            : location.hash === "#meeting"
+                ? "meeting"
+                : (
+                    save.level ||
+                    "forest"
+                )
+    );
+
+    if (!running) {
+
+        running = true;
+
+        requestAnimationFrame(
+            loop
+        );
+    }
+}
+
+
+// ============================================================
+// MENU BUTTONS
+// ============================================================
+
+document
+    .getElementById("go")
+    .onclick =
+    startGame;
+
+document
+    .getElementById("reset")
+    .onclick = () => {
+
+        save = {};
+
+        store();
+
+        startGame();
+    };
+
+</script>
+
+</body>
+</html>
+```
